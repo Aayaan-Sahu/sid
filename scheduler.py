@@ -1,6 +1,8 @@
 from collections import deque
 
 from config import Config
+from block_manager import BlockManager
+from sequence import Sequence, SequenceStatus
 
 class Scheduler:
     def __init__(self, config: Config):
@@ -10,8 +12,8 @@ class Scheduler:
         self.block_size = config.kvcache_block_size
         
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
-        self.waiting = deque[Sequence] = deque()
-        self.running = deque[Sequence] = deque()
+        self.waiting: deque[Sequence] = deque()
+        self.running: deque[Sequence] = deque()
     
     def is_finished(self):
         return not self.waiting and not self.running

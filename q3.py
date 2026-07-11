@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch.distributed import dist
+import torch.distributed as dist
 from transformers import Qwen3Config
 
 from linear import QKVParallelLinear, RowParallelLinear, MergedColumnParallelLinear
@@ -91,7 +91,7 @@ class Qwen3MLP(nn.Module):
         assert hidden_act == "silu"
         self.act_fn = SiluAndMul()
     
-    def foward(self, x):
+    def forward(self, x):
         gate_up = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
         x = self.down_proj(x)
@@ -142,7 +142,7 @@ class Qwen3Model(nn.Module):
         super().__init__()
 
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)]
+        self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
     
     def forward(self, input_ids: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:

@@ -3,4 +3,5 @@ safetensors
 flash_attn
 transformers
 tqdm
-atexit
+xxhash
+numpysaf

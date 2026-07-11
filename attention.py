@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import triton
 import triton.language as tl
-from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+from flash_attn_interface import flash_attn_varlen_func, flash_attn_with_kvcache
 
 from context import get_context
 
@@ -84,13 +84,6 @@ class Attention(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        # prefill: bool,
-        # q_sequences: Sequence[int],
-        # k_sequences: Sequence[int],
-        # v_sequences: Sequence[int],
-        # cache_seqlens: Optional[torch.tensor],
-        # slot_mapping: Optional[torch.tensor],
-        # block_table: Optional[torch.tensor]
     ):
         """
         instead of [batch, seq_len, heads, head_dim]
@@ -107,18 +100,6 @@ class Attention(nn.Module):
         sequence 1 has 4 cached KV tokens
         """
 
-        # max_seqlen_q = max(q_sequences)
-        # max_seqlen_k = max(k_sequences)
-        # cu_seqlens_q = compute_cu_seqlen(q_sequences, q.device)
-        # cu_seqlens_k = compute_cu_seqlen(k_sequences, k.device)
-
-        assert q.shape[0] == sum(q_sequences)
-        assert k.shape[0] == sum(k_sequences)
-        assert v.shape[0] == sum(k_sequences)
-        
-        # assert cu_seqlens_q[-1].item() == q.shape[0]
-        # assert cu_seqlens_k[-1].item() == k.shape[0]
-
         assert q.shape[-1] == self.head_dim
         assert k.shape[-1] == self.head_dim
         assert v.shape[-1] == self.head_dim
@@ -134,20 +115,34 @@ class Attention(nn.Module):
         if self.k_cache.numel() and self.v_cache.numel():  # if kv cache is not empty, then paged kv cache
             store_kv_cache(k, v, self.k_cache, self.v_cache, context.slot_mapping)
         
-        if prefill:
-            o = flash_attn_varlen_func(
-                q, k, v,
-                max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
-                max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
-                softmax_scale=self.softmax_scale,
-                causal=True,
-                block_table=context.block_tables,
-            )
+        if context.is_prefill:
+            if context.block_tables is not None: # prefix caching
+                k, v = self.k_cache, self.v_cache
+                o = flash_attn_with_kvcache(
+                    q,
+                    self.k_cache, self.v_cache,
+                    cache_seqlens=context.context_lens,
+                    page_table=context.block_tables,
+                    cu_seqlens_q=context.cu_seqlens_q,
+                    max_seqlen_q=context.max_seqlen_q,
+                    softmax_scale=self.softmax_scale,
+                    causal=True,
+                )
+            else:
+                o = flash_attn_varlen_func(
+                    q, k, v,
+                    max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
+                    max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
+                    softmax_scale=self.softmax_scale,
+                    causal=True,
+                )
         else:
             o = flash_attn_with_kvcache(
-                q.unsqueeze(1), k_cache, v_cache,
+                q.unsqueeze(1), self.k_cache, self.v_cache,
                 cache_seqlens=context.context_lens,
-                block_table=context.block_tables,
+                page_table=context.block_tables,
                 softmax_scale=self.softmax_scale,
                 causal=True,
             )
+        
+        return o
