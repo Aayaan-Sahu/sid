@@ -1,4 +1,5 @@
 import argparse
+from transformers import AutoTokenizer
 
 from llm_engine import LLMEngine
 
@@ -16,12 +17,23 @@ def main():
         "1 + 1 =",
     ]
 
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    prompts = [
+        tokenizer.apply_chat_template(
+            [{"role": "user", "content": p}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        for p in prompts
+    ]
+
     engine = LLMEngine(args.model, enforce_eager=args.enforce_eager)
     outputs = engine.generate(prompts)
 
     for prompt, output in zip(prompts, outputs):
         print(f"prompt: {prompt!r}")
-        print(f"completion: {output['text']!r}")
+        print(f"completion: {output['text'][:-10]!r}")
         print("-" * 40)
 
 
