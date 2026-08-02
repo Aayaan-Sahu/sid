@@ -24,7 +24,9 @@ class Sequence:
     block_size = 256 # must be the same as config kvcache_block_size
     counter = count()
 
-    def __init__(self, token_ids: list[int]):
+    def __init__(self, token_ids: list[int], max_tokens: int = 64, ignore_eos: bool = False):
+        assert token_ids, "prompt must contain at least one token"
+        assert max_tokens > 0
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -35,8 +37,8 @@ class Sequence:
         self.num_scheduled_tokens = 0
         self.is_prefill = True
         self.block_table = []
-        self.max_tokens = 64
-        self.ignore_eos = False
+        self.max_tokens = max_tokens
+        self.ignore_eos = ignore_eos
 
         self.num_verified_tokens = 0
     

@@ -15,6 +15,7 @@ class Config:
     eos: int = -1
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
+    enable_prefix_caching: bool = True
 
     # determinism
     verify_window: int = 32

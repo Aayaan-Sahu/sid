@@ -13,7 +13,11 @@ class Scheduler:
         self.verify_window = config.verify_window
         self.enable_determinism = config.enable_determinism
 
-        self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
+        self.block_manager = BlockManager(
+            config.num_kvcache_blocks,
+            config.kvcache_block_size,
+            config.enable_prefix_caching,
+        )
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
     
