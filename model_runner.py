@@ -138,6 +138,7 @@ class ModelRunner:
         max_seqlen_q = 0
         max_seqlen_k = 0
         slot_mapping = []
+        context_lens = []
         block_tables = None
         for seq in seqs:
             start = seq.num_cached_tokens
@@ -150,6 +151,7 @@ class ModelRunner:
             cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
             max_seqlen_q = max(seqlen_q, max_seqlen_q)
             max_seqlen_k = max(seqlen_k, max_seqlen_k)
+            context_lens.append(seqlen_k)    # kv valid for positions 0..end-1 once store_kv_cache runs
             if not seq.block_table:    # warmup
                 continue
             start_block = start // self.block_size
@@ -165,12 +167,15 @@ class ModelRunner:
                 slot_mapping.extend(range(slot_start, slot_end))
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
             block_tables = self.prepare_block_tables(seqs)
+            context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        else:
+            context_lens = None
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
+        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
         return input_ids, positions
     
     def prepare_decode(self, seqs: list[Sequence]):
@@ -190,7 +195,64 @@ class ModelRunner:
         block_tables = self.prepare_block_tables(seqs)
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
-    
+
+    def prepare_verify(self, seqs: list[Sequence]):
+        # replay the window of unverified tokens through the prefix-cache prefill path.
+        # inputs are tokens V-1..end-1: row j recomputes the logits that sampled token V+j,
+        # and store_kv_cache overwrites the decode-written kv for those positions with
+        # verifier-written kv. the window is always W tokens except the final (pre-finish)
+        # window, whose length is determined by the content alone, so shapes are consistent
+        # across runs either way.
+        input_ids = []
+        positions = []
+        cu_seqlens_q = [0]
+        max_seqlen_q = 0
+        slot_mapping = []
+        context_lens = []
+        for seq in seqs:
+            start = seq.num_verified_tokens - 1
+            seqlen_q = min(self.config.verify_window, seq.num_tokens - seq.num_verified_tokens)
+            end = start + seqlen_q
+            input_ids.extend(seq[start:end])
+            positions.extend(range(start, end))
+            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+            max_seqlen_q = max(seqlen_q, max_seqlen_q)
+            context_lens.append(end)    # kv valid for positions 0..end-1 once store_kv_cache runs
+            for pos in range(start, end):
+                slot_mapping.append(seq.block_table[pos // self.block_size] * self.block_size + pos % self.block_size)
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        block_tables = self.prepare_block_tables(seqs)
+        set_context(True, cu_seqlens_q=cu_seqlens_q, max_seqlen_q=max_seqlen_q, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables, is_verify=True)
+        return input_ids, positions
+
+    @torch.inference_mode()
+    def run_verify(self, seqs: list[Sequence]) -> list[tuple[int, int]] | None:
+        input_ids, positions = self.prepare_verify(seqs)
+        logits = self.run_model(input_ids, positions, True)    # is_prefill=True: eager, no cuda graphs
+        reset_context()
+        if self.rank != 0:
+            return None
+        verified_ids = torch.argmax(logits, dim=-1).tolist()
+        results = []
+        offset = 0
+        for seq in seqs:
+            seqlen_q = min(self.config.verify_window, seq.num_tokens - seq.num_verified_tokens)
+            window = seq[seq.num_verified_tokens : seq.num_verified_tokens + seqlen_q]
+            replayed = verified_ids[offset : offset + seqlen_q]
+            offset += seqlen_q
+            num_matched = 0
+            for got, expected in zip(replayed, window):
+                if got != expected:
+                    break
+                num_matched += 1
+            correction_token = replayed[num_matched] if num_matched < seqlen_q else -1
+            results.append((num_matched, correction_token))
+        return results
+
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
         if is_prefill or self.enforce_eager or input_ids.size(0) > 512:

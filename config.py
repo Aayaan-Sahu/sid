@@ -16,6 +16,10 @@ class Config:
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
 
+    # determinism
+    verify_window: int = 32
+    enable_determinism: bool = True
+
     def __post_init__(self):
         assert os.path.isdir(self.model)
         assert self.kvcache_block_size > 0

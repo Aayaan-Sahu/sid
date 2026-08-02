@@ -21,7 +21,7 @@ class SequenceStatus(Enum):
 
 
 class Sequence:
-    block_size = 256
+    block_size = 256 # must be the same as config kvcache_block_size
     counter = count()
 
     def __init__(self, token_ids: list[int]):
@@ -37,6 +37,8 @@ class Sequence:
         self.block_table = []
         self.max_tokens = 64
         self.ignore_eos = False
+
+        self.num_verified_tokens = 0
     
     def __len__(self):
         return self.num_tokens
@@ -79,13 +81,22 @@ class Sequence:
 
     def __getstate__(self):
         last_state = self.last_token if not self.is_prefill else self.token_ids
-        return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.num_scheduled_tokens, self.block_table, last_state)
-    
+        return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.num_scheduled_tokens, self.num_verified_tokens, self.block_table, last_state)
+
     def __setstate__(self, state):
-        self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.num_scheduled_tokens, self.block_table, last_state = state
+        self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.num_scheduled_tokens, self.num_verified_tokens, self.block_table, last_state = state
         if isinstance(last_state, list):
             self.token_ids = last_state
             self.last_token = self.token_ids[-1]
         else:
             self.token_ids = []
             self.last_token = last_state
+    
+
+    def rollback(self, num_keep: int, correction_token: int):
+        self.token_ids = self.token_ids[:num_keep]
+        self.token_ids.append(correction_token)
+        self.last_token = correction_token
+        self.num_tokens = num_keep + 1
+        self.num_cached_tokens = num_keep  # the correction token kv is pending
+        self.num_verified_tokens = num_keep + 1

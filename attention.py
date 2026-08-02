@@ -116,7 +116,7 @@ class Attention(nn.Module):
             store_kv_cache(k, v, self.k_cache, self.v_cache, context.slot_mapping)
         
         if context.is_prefill:
-            if context.block_tables is not None: # prefix caching
+            if context.block_tables is not None: # prefix caching / verify
                 k, v = self.k_cache, self.v_cache
                 o = flash_attn_with_kvcache(
                     q,
@@ -135,6 +135,7 @@ class Attention(nn.Module):
                     max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
                     softmax_scale=self.softmax_scale,
                     causal=True,
+                    num_splits=1 if context.is_verify else 0,   # fixed kv-reduction order for verifier
                 )
         else:
             o = flash_attn_with_kvcache(
