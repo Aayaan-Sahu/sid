@@ -115,9 +115,10 @@ class Attention(nn.Module):
         if self.k_cache.numel() and self.v_cache.numel():  # if kv cache is not empty, then paged kv cache
             store_kv_cache(k, v, self.k_cache, self.v_cache, context.slot_mapping)
         
+        # canonical passes pin the kv reduction order (num_splits=0 lets a heuristic pick it from the batch)
+        num_splits = 1 if context.canonical else 0
         if context.is_prefill:
             if context.block_tables is not None: # prefix caching / verify
-                k, v = self.k_cache, self.v_cache
                 o = flash_attn_with_kvcache(
                     q,
                     self.k_cache, self.v_cache,
@@ -127,6 +128,7 @@ class Attention(nn.Module):
                     max_seqlen_q=context.max_seqlen_q,
                     softmax_scale=self.softmax_scale,
                     causal=True,
+                    num_splits=num_splits,
                 )
             else:
                 o = flash_attn_varlen_func(
@@ -135,7 +137,7 @@ class Attention(nn.Module):
                     max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
                     softmax_scale=self.softmax_scale,
                     causal=True,
-                    num_splits=1 if context.is_verify else 0,   # fixed kv-reduction order for verifier
+                    num_splits=num_splits,
                 )
         else:
             o = flash_attn_with_kvcache(

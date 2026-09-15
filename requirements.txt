@@ -2,6 +2,11 @@ torch
 safetensors
 flash_attn
 transformers
+huggingface_hub
 tqdm
 xxhash
-numpysaf
+numpy
+fastapi
+uvicorn
+httpx
+openai
