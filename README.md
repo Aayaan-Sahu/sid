@@ -116,21 +116,27 @@ python tests/test_determinism_gpu.py --model Qwen/Qwen3-8B
 
 ## Benchmark against other servers
 
-Start the servers you want to compare. The model is the same for all of them; use one GPU at a time, or lower their memory settings.
+vLLM needs its own virtualenv. Installing it into sid's environment replaces torch and breaks flash-attn-3. The scripts take care of that, and they also run vLLM with settings that match sid:
+- Qwen3 thinking turned off
+- no model-provided sampling defaults
+- the hermes tool parser
 
 ```bash
-python server.py --model Qwen/Qwen3-8B --port 8000
-vllm serve Qwen/Qwen3-8B --port 8001 --enable-auto-tool-choice --tool-call-parser hermes
+bash scripts/vllm_setup.sh     # one time: checks, then installs vLLM into ~/vllm-env
+bash scripts/vllm_serve.sh     # starts vLLM on :8001 in the background, waits for health, runs a smoke test
+bash scripts/vllm_serve.sh stop
 ```
 
-Include vLLM's batch-invariant mode as well, if your version has it. Check the vLLM docs for the current flag.
-
-Then run both benchmarks:
+Only one server fits on the GPU at a time, so benchmark them one after the other:
 
 ```bash
-python bench/determinism.py --endpoint sid=http://localhost:8000 --endpoint vllm=http://localhost:8001 \
-    --targets 8 --repeats 3 --concurrency 32,128
+python server.py --model Qwen/Qwen3-8B --port 8000     # terminal 1
+python bench/determinism.py --endpoint sid=http://localhost:8000 --out sid.json
 python bench/agent_replay.py --base-url http://localhost:8000/v1 --runs 5 --background 64
+# stop sid (Ctrl-C), then:
+bash scripts/vllm_serve.sh
+python bench/determinism.py --endpoint vllm=http://localhost:8001 --out vllm.json
+python bench/agent_replay.py --base-url http://localhost:8001/v1 --runs 5 --background 64
 ```
 
 - **`bench/determinism.py`** sends support-agent requests: a knowledge base of about 2.3k tokens, three tools, and a customer question. It runs them isolated, with the prefix cache warm, and under background load. For each target it counts how many distinct outputs came back, and it also reports throughput and TTFT.
