@@ -2,6 +2,8 @@
 
 sid is an LLM inference engine whose outputs don't depend on server load. The same request with the same model and settings returns the same tokens, whether it runs alone or next to 200 other requests.
 
+See it in one command: `bash demo/run_demo.sh` runs the same engine with the verifier on and off and prints the difference. The talk track is in [demo/README.md](demo/README.md).
+
 It exposes an OpenAI-compatible API, so any agent stack that can take a custom `base_url` works with it: the OpenAI SDKs, LangChain, rig-core, and others.
 
 ## Why outputs usually change under load
