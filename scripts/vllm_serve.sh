@@ -89,8 +89,16 @@ echo -n "waiting for /health (first start compiles kernels; can take a few minut
 for i in $(seq 900); do
     if ! kill -0 "$pid" 2>/dev/null; then
         echo
-        tail -n 40 "$LOG"
-        fail "vLLM exited during startup; the log tail is above (full log: $LOG)"
+        # vLLM's outer traceback just says "See root cause above", so show the first real error in the log
+        echo "---- first errors in $LOG ----"
+        grep -nE "Error|error:|Exception|No space|out of memory|not enough memory|no kernel image|Killed|Aborted" "$LOG" \
+            | grep -vE "error_|ErrorHandler" | head -20 || true
+        echo "---- last 25 lines ----"
+        tail -n 25 "$LOG"
+        echo "----"
+        echo "shared memory (vLLM's engine process needs it; 64M is usually too small):"
+        df -h /dev/shm || true
+        fail "vLLM exited during startup. full log: $LOG"
     fi
     if curl -sf "http://localhost:$PORT/health" >/dev/null 2>&1; then
         echo " up after ${i}s"
