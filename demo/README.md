@@ -1,5 +1,21 @@
 # Demo runbook
 
+## The short version (what to show live)
+
+Two servers side by side, same question, ten runs each:
+
+```bash
+bash demo/servers.sh start      # deterministic on :8000, non-deterministic on :8001
+python demo/compare.py          # 10 agent runs against each, at the same time
+bash demo/servers.sh stop
+```
+
+`compare.py` takes about a minute and prints one screen: how many of the ten runs matched on each server, and the first place the non-deterministic one diverged (a different tool call, or the character where the answer changed). Run it again with a different `--question` to show it live.
+
+Everything below is the longer version, for when there is time.
+
+---
+
 One command, about 15 minutes, no second inference server needed:
 
 ```bash
