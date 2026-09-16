@@ -10,7 +10,11 @@ python demo/compare.py          # 10 agent runs against each, at the same time
 bash demo/servers.sh stop
 ```
 
-`compare.py` takes about a minute and prints one screen: how many of the ten runs matched on each server, and the first place the non-deterministic one diverged (a different tool call, or the character where the answer changed). Run it again with a different `--question` to show it live.
+`compare.py` takes about two minutes and prints one screen: how many of the ten runs matched the idle run on each server, and the first place the non-deterministic one diverged (a different tool call, or the character where the answer changed). Run it again with a different `--question` to show it live.
+
+**Each server answers once while idle, then answers the same question again while background traffic flows through it.** That contrast is the whole point. Sending ten copies of a request simultaneously proves nothing: they ride in the same batches, hit identical arithmetic, and agree even without the verifier. What changes an answer is the company a request keeps.
+
+The deterministic server also reports how many drafted tokens its verifier caught and corrected during the run. That number is the nondeterminism itself, fixed before it reached the client.
 
 Everything below is the longer version, for when there is time.
 

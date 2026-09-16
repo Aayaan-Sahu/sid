@@ -46,6 +46,9 @@ def serve(tokenizer, deterministic: bool, noise: float) -> int:
 
 class Args:
     runs = 6
+    background = 4
+    warmup = 1.0
+    jitter = 0.5
     mode = "chat"
     question = "How do I add a teammate, and what does it cost on the Growth plan?"
     temperature = 0.0
