@@ -54,8 +54,13 @@ need_mib=$(awk -v t="$total_mib" -v u="$GPU_UTIL" 'BEGIN {print int(t * u)}')
 free_mib=$((total_mib - used_mib))
 echo "total ${total_mib} MiB, in use ${used_mib} MiB, vLLM will claim ${need_mib} MiB (GPU_UTIL=$GPU_UTIL)"
 if [ "$free_mib" -lt "$need_mib" ]; then
+    # something else (usually a sid server) holds part of the card. vLLM's utilization is a fraction of TOTAL
+    # memory, so shrink it to fit what is actually free instead of refusing to start
     nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true
-    fail "not enough free GPU memory. stop the process above (e.g. the sid server: Ctrl-C it, or kill <pid>), or lower GPU_UTIL"
+    GPU_UTIL=$(awk -v f="$free_mib" -v t="$total_mib" 'BEGIN {printf "%.2f", int(f * 0.92 / t * 100) / 100}')
+    need_mib=$(awk -v t="$total_mib" -v u="$GPU_UTIL" 'BEGIN {print int(t * u)}')
+    awk -v u="$GPU_UTIL" 'BEGIN {exit !(u >= 0.20)}' || fail "only ${free_mib} MiB free: not enough for this model. stop the process above (Ctrl-C the sid server, or kill <pid>)"
+    printf '\033[33mlowering GPU_UTIL to %s (%s MiB) to fit alongside the process above; smaller kv cache, still correct\033[0m\n' "$GPU_UTIL" "$need_mib"
 fi
 
 extra_args=()
