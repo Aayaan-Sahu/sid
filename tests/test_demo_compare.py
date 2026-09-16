@@ -46,6 +46,8 @@ def serve(tokenizer, deterministic: bool, noise: float) -> int:
 
 class Args:
     runs = 6
+    questions = 1
+    question_seed = 0
     background = 4
     warmup = 1.0
     jitter = 0.5
@@ -70,24 +72,28 @@ async def main():
     args.nodet = f"http://127.0.0.1:{nodet_port}/v1"
     await asyncio.sleep(2)    # let uvicorn bind
 
+    conversations = compare.build_conversations(args)
     results = await asyncio.gather(
-        compare.run_server("deterministic", args.det, args),
-        compare.run_server("non-deterministic", args.nodet, args),
+        compare.run_server("deterministic", args.det, conversations, args),
+        compare.run_server("non-deterministic", args.nodet, conversations, args),
     )
-    compare.report(results, args)
+    compare.report(results, conversations, args)
 
     det, nodet = results
     for result in results:
         assert not result.get("error"), result["error"]
-        assert all("error" not in r for r in result["runs"]), [r for r in result["runs"] if "error" in r]
-    det_keys = {r["key"] for r in det["runs"]}
-    nodet_keys = {r["key"] for r in nodet["runs"]}
-    assert len(det_keys) == 1, f"deterministic server returned {len(det_keys)} distinct answers"
-    assert len(nodet_keys) > 1, (
-        f"non-deterministic server returned one answer; the fake model's noise did not change the output, "
-        f"so this rehearsal cannot show divergence"
+        assert all("error" not in r for r in result["references"]), result["references"]
+        assert all("error" not in r for runs in result["runs"] for r in runs), result["runs"]
+    det_identical, det_total, det_distinct = compare.tally(det, 0)
+    nodet_identical, nodet_total, nodet_distinct = compare.tally(nodet, 0)
+    assert det_distinct == 1, f"deterministic server returned {det_distinct} distinct answers"
+    assert det_identical == det_total, f"only {det_identical}/{det_total} matched the idle run"
+    assert nodet_distinct > 1, (
+        "non-deterministic server returned one answer; the fake model's noise did not change the output, "
+        "so this rehearsal cannot show divergence"
     )
-    print(f"ok  deterministic: 1 distinct answer; non-deterministic: {len(nodet_keys)} distinct answers")
+    print(f"ok  deterministic: {det_identical}/{det_total} match the idle run; "
+          f"non-deterministic: {nodet_identical}/{nodet_total}, {nodet_distinct} distinct answers")
 
 
 if __name__ == "__main__":

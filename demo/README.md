@@ -5,9 +5,25 @@
 Two servers side by side, same question, ten runs each:
 
 ```bash
-bash demo/servers.sh start      # deterministic on :8000, non-deterministic on :8001
-python demo/compare.py          # 10 agent runs against each, at the same time
+bash demo/servers.sh start           # deterministic on :8000, non-deterministic on :8001
+python demo/compare.py --questions 8 # which questions change under load?
 bash demo/servers.sh stop
+```
+
+Start with the sweep. A load-induced wobble only changes an answer when two tokens are nearly tied somewhere in it, which is true of roughly one prompt in five, so a single question is a coin flip. The sweep tests eight and prints which ones moved:
+
+```
+      question                                     deterministic   non-deterministic
+   1  If we cancel our annual plan after 20 days…       10/10              10/10
+   2  Does Clinico work with Stripe? How often…         10/10               3/10
+   ...
+      questions whose answer changed under load           0/8                 2/8
+```
+
+Then take a question that moved and tell the agent story with it:
+
+```bash
+python demo/compare.py --question "Does Clinico work with Stripe? How often does it sync?"
 ```
 
 `compare.py` takes about two minutes and prints one screen: how many of the ten runs matched the idle run on each server, and the first place the non-deterministic one diverged (a different tool call, or the character where the answer changed). Run it again with a different `--question` to show it live.
