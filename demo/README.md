@@ -1,72 +1,98 @@
 # Demo runbook
 
-## The short version (what to show live)
+Measured on one H200 with Qwen3-8B, 8 questions x 10 runs, 96 concurrent background requests:
 
-Two servers side by side, same question, ten runs each:
+| | deterministic | non-deterministic |
+|---|---|---|
+| questions whose answer changed under load | **0 of 8** | **5 of 8** |
 
-```bash
-bash demo/servers.sh start           # deterministic on :8000, non-deterministic on :8001
-python demo/compare.py --questions 8 # which questions change under load?
-bash demo/servers.sh stop
-```
+Same model, same GPU, same seed. One flag apart.
 
-Start with the sweep. A load-induced wobble only changes an answer when two tokens are nearly tied somewhere in it, which is true of roughly one prompt in five, so a single question is a coin flip. The sweep tests eight and prints which ones moved:
-
-```
-      question                                     deterministic   non-deterministic
-   1  If we cancel our annual plan after 20 days…       10/10              10/10
-   2  Does Clinico work with Stripe? How often…         10/10               3/10
-   ...
-      questions whose answer changed under load           0/8                 2/8
-```
-
-Then take a question that moved and tell the agent story with it:
+## Setup (do this before he is watching)
 
 ```bash
-python demo/compare.py --question "Does Clinico work with Stripe? How often does it sync?"
+bash demo/servers.sh start     # deterministic :8000, non-deterministic :8001; ~2 min
 ```
 
-`compare.py` takes about two minutes and prints one screen: how many of the ten runs matched the idle run on each server, and the first place the non-deterministic one diverged (a different tool call, or the character where the answer changed). Run it again with a different `--question` to show it live.
-
-**Each server answers once while idle, then answers the same question again while background traffic flows through it.** That contrast is the whole point. Sending ten copies of a request simultaneously proves nothing: they ride in the same batches, hit identical arithmetic, and agree even without the verifier. What changes an answer is the company a request keeps.
-
-The deterministic server also reports how many drafted tokens its verifier caught and corrected during the run. That number is the nondeterminism itself, fixed before it reached the client.
-
-Everything below is the longer version, for when there is time.
-
----
-
-One command, about 15 minutes, no second inference server needed:
+Then do a dry run of everything below, and keep the saved results as backup:
 
 ```bash
-bash demo/run_demo.sh
+python demo/compare.py --questions 8 --runs 10 --background 96 --out demo/results/sweep.json
 ```
 
-It runs the same engine twice on the same GPU with the same model, once with the verifier on and once with it off, and writes everything to `demo/results/`.
-
-To re-print the comparison later, without touching the GPU:
+If a live run ever misbehaves, re-print the saved one without touching the GPU:
 
 ```bash
-python demo/side_by_side.py --report demo/results/det.json demo/results/nodet.json
+python demo/compare.py --from demo/results/sweep.json
 ```
 
-## What to show, in order
+## The demo
 
-### 1. The problem (1 minute)
+### 1. Frame it (20 seconds)
 
-Send one support question 20 times, all at once, while 64 other requests are in flight. Temperature 0.7 with a fixed seed, which is the setting where a caller already expects to get the same answer back.
+Two servers, same model, same GPU, same request, same seed. One has the verifier on, the other off. Nothing else differs.
 
-With the verifier off, the same request returns several different answers. The script prints the exact character where two runs diverge, with the two continuations underneath.
+### 2. Run the sweep (about 2.5 minutes, live)
 
-Say this: *the request never changed. Server load did. Kernels pick different algorithms depending on how many tokens are batched together, so the arithmetic changes, one token flips, and the answer goes somewhere else.*
+```bash
+python demo/compare.py --questions 8 --runs 10 --background 96
+```
 
-### 2. The fix (1 minute)
+Each server answers 8 support questions once while idle, then answers each one 10 more times while 96 other requests flow through it. Talk over it while it runs (see beat 3).
 
-Same screen, verifier on: 20/20 identical, one distinct answer.
+The result to land on:
 
-Say this: *the prompt is processed at a fixed shape, and every generated token is recomputed by a verifier that always runs at the same shape. What the batch happens to contain can no longer change the output. Fast decoding still does the work; the verifier only confirms it.*
+```
+      questions whose answer changed under load    0/8            5/8
+```
 
-### 3. It holds where it usually breaks (1 minute)
+Then read out the divergence it prints. This one is not cosmetic:
+
+```
+  non-deterministic, question 1: step 1 diverges at character 158
+    idle        ...contact your administrator to check your role and confirm if SSO can be set up.
+    under load  ...contact your administrator to check your role or upgrade to a plan that includes
+                   SSO (Growth, Scale, or Enterprise).
+```
+
+*Same customer, same question, same settings. One version says ask your admin. The other says buy a bigger plan. The only thing that changed is how busy the server was.*
+
+### 3. Explain why, while it runs (40 seconds)
+
+GPU kernels pick their algorithm based on how many tokens are in the batch. A different algorithm means a different floating-point summation order, so the logits shift slightly. Nearly always that changes nothing. Occasionally two candidate tokens are close enough that it flips one, and from there the answer goes somewhere else.
+
+How many tokens are in a batch depends on what everyone else is doing. So your answer depends on other people's traffic.
+
+sid processes the prompt at a fixed shape, then recomputes every generated token in a verifier that always runs at the same shape. Drafting stays fast; the verifier only confirms. What the batch happens to contain can no longer change the output.
+
+Point at the last line of the output:
+
+```
+  deterministic: the verifier caught and corrected 36 drafted tokens during this run
+```
+
+*That is the same load-dependent arithmetic happening on the deterministic server too. It just gets corrected before the customer sees it.*
+
+### 4. Show it on a real agent (1 minute)
+
+```bash
+python demo/compare.py --question "How do I set up SSO? We're on the Starter plan and I'm not sure I have permission."
+```
+
+This runs the full agent loop: search the knowledge base, read results, answer. Tool calls included. Ten runs per server under load, compared against the idle answer.
+
+*When a wobble lands in a tool call instead of prose, the agent searches for something different and the whole trajectory changes. That is why replay and simulation are exact here and approximate everywhere else.*
+
+### 5. Show how it plugs in (30 seconds)
+
+```bash
+curl http://localhost:8000/v1/chat/completions -H 'content-type: application/json' \
+  -d '{"model": "Qwen/Qwen3-8B", "messages": [{"role": "user", "content": "..."}]}'
+```
+
+An OpenAI-compatible endpoint with streaming, tools and seeds. Anything that takes a `base_url` works, including rig-core and the OpenAI SDKs. Every response carries `system_fingerprint` and `sid.output_sha256`: store the hash with a trace, replay it later, and prove the model did the same thing.
+
+### 6. Deeper evidence, if he wants it
 
 ```bash
 python tests/test_determinism_gpu.py --model Qwen/Qwen3-8B
@@ -74,45 +100,37 @@ python tests/test_determinism_gpu.py --model Qwen/Qwen3-8B
 
 Identical token IDs across: isolated, prefix cache warm, batch of 64, batch of 200, and a deliberately tiny KV cache that forces sequences to be evicted and resumed mid-generation. The `nodet-*` rows are the control.
 
-### 4. It's a real agent, not a single call (1 minute)
-
-The agent replay in the demo output runs a multi-step tool-calling agent (knowledge base search, then answer) five times under load. With the verifier on, all five transcripts are identical, tool arguments included.
-
-Say this: *this is what makes replay and simulation exact. Run the same trace twice and you get the same thing, so a regression test that fails means the change caused it, not the scheduler.*
-
-### 5. How it plugs in (30 seconds)
-
-```bash
-curl http://localhost:8000/v1/chat/completions -d '{"model": "Qwen/Qwen3-8B", "messages": [...]}'
-```
-
-An OpenAI-compatible endpoint: streaming, tools, seeds. Anything that takes a `base_url` works, including rig-core and the OpenAI SDKs. Every response carries `system_fingerprint` and `sid.output_sha256`, so a stored trace can be replayed and verified.
-
 ## Numbers to have ready
-
-From the last run on one H200 with Qwen3-8B:
 
 | | |
 |---|---|
-| Determinism | 16/16 outputs bit-identical across isolated, batched-64, batched-200, preempted |
-| Without the verifier | 3/16 outputs changed between running alone and in a batch of 200 (greedy; far more at temperature 0.7) |
-| Rollback rate | 30 of 524 verify windows, about 6% |
+| Sweep | 0 of 8 questions changed with the verifier, 5 of 8 without |
+| Bit-exact test | 16/16 outputs identical across isolated, batched-64, batched-200, preempted |
+| Rollback rate | about 6% of verify windows (30 of 524 in one run) |
 | Throughput | 953 output tok/s with the verifier, 2380 without, at batch 200 |
+| Latency under load | agent run averaged 73s with the verifier, 34s without |
 
 ## Questions he will ask
 
-**"What does it cost?"** Right now about 2.5x throughput at batch 200. Most of it isn't the verifier: prompts are currently prefilled one sequence at a time. Batching that at a fixed shape is the next piece of work. Be straight about the number.
+**"What does it cost?"** About 2.5x throughput today, and he can see it as latency on screen. Most of it is not the verifier: prompts are currently prefilled one sequence at a time. Batching that at a fixed shape is the next piece of work. Give the number before he finds it.
 
-**"Why not vLLM's batch-invariant mode?"** Same goal, different trade. That mode replaces kernels with batch-invariant ones and pays on every token. sid keeps the fast kernels for drafting and pays only to verify. Worth measuring both; not yet measured here.
+**"Why not vLLM's batch-invariant mode?"** Same goal, different trade. That mode swaps in batch-invariant kernels and pays on every token. sid keeps fast kernels for drafting and pays only to verify. Worth measuring both; not measured yet.
 
-**"Does this fix hallucinations?"** No. It makes behavior reproducible, which is what makes evals, replay and regression tests trustworthy. Brainfish's own framing (knowledge quality) is the other half.
+**"Does this fix hallucinations?"** No. It makes behavior reproducible, which is what makes evals, replay and regression tests trustworthy. Knowledge quality is the other half, and that is the half Brainfish already talks about.
 
-**"Can you do this for our hosted models?"** No. Determinism has to come from inside the server. This is for the parts of the stack that run open models.
+**"Can you do this for hosted models?"** No. Determinism has to come from inside the server. This is for the parts of a stack that run open models.
 
-**"What breaks the guarantee?"** A different GPU model, a different tensor-parallel size, or different torch/flash-attn versions. Each of those changes the kernels, and the `system_fingerprint` changes with them. Within one fingerprint, load and batching cannot change the output.
+**"What breaks the guarantee?"** A different GPU model, a different tensor-parallel size, or different torch/flash-attn versions. Each changes the kernels, and `system_fingerprint` changes with them. Within one fingerprint, load and batching cannot change the output.
 
 ## Limits to state up front
 
 - Qwen3 dense models only so far; Llama and Qwen2.5 are small additions.
 - One node; on one H200 that means up to 32B.
-- Determinism applies to the model server. If retrieval returns different documents, the prompt is different and so is the answer.
+- This covers the model server. If retrieval returns different documents, the prompt is different and so is the answer.
+- The questions and knowledge base in the demo are synthetic, generated by `bench/workload.py`.
+
+## Teardown
+
+```bash
+bash demo/servers.sh stop
+```

@@ -23,6 +23,7 @@ import random
 import statistics
 import sys
 import time
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,6 +34,8 @@ from bench.determinism import chat, common_prefix_len
 from bench.workload import TOOLS, filler_conversations, system_prompt, target_conversations
 
 BOLD, GREEN, RED, DIM, OFF = "\033[1m", "\033[32m", "\033[31m", "\033[2m", "\033[0m"
+
+SAVED_ARGS = ("runs", "background", "mode", "temperature", "seed")    # enough to re-print a saved run
 
 AGENT_SYSTEM = (
     f"You are the customer support agent for {PRODUCT}. You only know what search_knowledge_base returns, so "
@@ -247,8 +250,12 @@ def report(results: list[dict], conversations: list[dict], args):
                   f"- load-dependent arithmetic, fixed before it reached the client{OFF}")
     if args.out:
         with open(args.out, "w") as f:
-            json.dump({"conversations": [c["question"] for c in conversations], "results": results}, f, indent=2)
-        print(f"  {DIM}transcripts written to {args.out}{OFF}")
+            json.dump({
+                "args": {k: getattr(args, k) for k in SAVED_ARGS},
+                "conversations": [c["question"] for c in conversations],
+                "results": results,
+            }, f, indent=2)
+        print(f"  {DIM}transcripts written to {args.out} (re-print with --from {args.out}){OFF}")
 
 
 async def main():
@@ -270,7 +277,14 @@ async def main():
     parser.add_argument("--model", default=None)
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--out", default=None)
+    parser.add_argument("--from", dest="from_file", default=None, help="re-print a saved run (no servers needed)")
     args = parser.parse_args()
+    if args.from_file:
+        with open(args.from_file) as f:
+            data = json.load(f)
+        saved = SimpleNamespace(**data["args"], out=None)
+        report(data["results"], [{"question": q, "messages": [], "tools": None} for q in data["conversations"]], saved)
+        return
     if args.mode is None:
         args.mode = "chat" if args.questions > 1 else "agent"
     if args.questions > 1 and args.mode == "agent":
