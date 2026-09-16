@@ -74,6 +74,7 @@ On startup it prints the engine fingerprint. Useful flags:
 | `--no-determinism` | Plain fast decode, for comparison |
 | `--max-num-kvcache-blocks N` | Shrinks the KV cache to force preemption |
 | `--verify-window` / `--verify-batch-size` | Sets W / B |
+| `--gpu-memory-utilization` | Share of the memory **free at startup** to spend on KV cache, so sid runs on a shared GPU without taking the card |
 | `--api-key` | Requires a key on requests |
 | `--dist-port` | Must be unique for each engine on a machine |
 

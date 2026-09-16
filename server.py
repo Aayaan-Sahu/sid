@@ -566,7 +566,8 @@ def main():
     parser.add_argument("--max-model-len", type=int, default=32768)
     parser.add_argument("--max-num-seqs", type=int, default=256)
     parser.add_argument("--max-num-batched-tokens", type=int, default=32768)
-    parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.9,
+                        help="share of the GPU memory that is free at startup to spend on kv cache; sid leaves the rest alone")
     parser.add_argument("--max-num-kvcache-blocks", type=int, default=-1, help="cap the kv cache, e.g. to force preemption in tests")
     parser.add_argument("--default-max-tokens", type=int, default=2048)
     parser.add_argument("--enforce-eager", action="store_true")

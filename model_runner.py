@@ -131,17 +131,30 @@ class ModelRunner:
 
         config = self.config
         hf_config = config.hf_config
-        free, total = torch.cuda.mem_get_info()  # ask gpu for amount of free memory and total memory
-        used = total - free
-        peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
-        current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+        # gpu_memory_utilization is a fraction of what is FREE right now (the weights are already loaded and
+        # the caching allocator has been emptied), not of the whole card. so sid takes its share of whatever
+        # is left and coexists with other processes on a shared gpu.
+        free, total = torch.cuda.mem_get_info()
+        stats = torch.cuda.memory_stats()
+        activation_headroom = max(stats["allocated_bytes.all.peak"] - stats["allocated_bytes.all.current"], 0)
+        graph_reserve = 0 if self.enforce_eager else 2**30    # the cuda graph pool is captured after this
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
         block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
-        config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
+        budget = free * config.gpu_memory_utilization - activation_headroom - graph_reserve
+        config.num_kvcache_blocks = int(budget) // block_bytes
         if config.max_num_kvcache_blocks > 0:
             config.num_kvcache_blocks = min(config.num_kvcache_blocks, config.max_num_kvcache_blocks)
-        assert config.num_kvcache_blocks > 0
+        assert config.num_kvcache_blocks > 0, (
+            f"no room for a kv cache: {free / 2**30:.1f} GiB free on the gpu, of which "
+            f"{activation_headroom / 2**30:.1f} GiB is reserved for activations and {graph_reserve / 2**30:.1f} GiB for cuda graphs. "
+            f"free up gpu memory, raise --gpu-memory-utilization (currently {config.gpu_memory_utilization}), "
+            f"lower --max-num-batched-tokens, or use a smaller model"
+        )
+        if self.rank == 0:
+            print(f"[sid] kv cache: {config.num_kvcache_blocks} blocks x {self.block_size} tokens = "
+                  f"{config.num_kvcache_blocks * block_bytes / 2**30:.1f} GiB ({free / 2**30:.1f} GiB was free, "
+                  f"{total / 2**30:.1f} GiB total)", flush=True)
         # zeros, not empty: verifier padding rows and dummy slots read slots that were never written, and bf16
         # garbage (nan/inf) there could leak into real rows through 0 * nan
         self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)

@@ -19,10 +19,13 @@ mkdir -p "$RESULTS"
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$*"; exit 1; }
 
-used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')
-if [ "${used_mib:-0}" -gt 8000 ]; then
+GPU_UTIL="${GPU_UTIL:-0.9}"
+read -r total_mib used_mib < <(nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits | head -1 | tr -d ',')
+free_mib=$((total_mib - used_mib))
+echo "GPU: ${free_mib} MiB free of ${total_mib} MiB; sid will use ${GPU_UTIL} of what is free and leave the rest"
+if [ "$free_mib" -lt 24000 ]; then
     nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true
-    fail "${used_mib} MiB of GPU memory is already in use. stop the process above first (the demo needs the whole card)"
+    fail "only ${free_mib} MiB free: not enough for an 8B model (~17 GiB of weights plus kv cache). wait for memory, or run a smaller model with MODEL=Qwen/Qwen3-1.7B bash demo/run_demo.sh"
 fi
 
 server_pid=""
@@ -39,7 +42,7 @@ trap stop_server EXIT
 start_server() {    # $1 = extra flags, $2 = log file
     local extra="$1" log="$2"
     # shellcheck disable=SC2086
-    python server.py --model "$MODEL" --port "$PORT" $extra >"$log" 2>&1 &
+    python server.py --model "$MODEL" --port "$PORT" --gpu-memory-utilization "$GPU_UTIL" $extra >"$log" 2>&1 &
     server_pid=$!
     echo -n "  starting server (loading weights, capturing cuda graphs)"
     for i in $(seq 600); do
